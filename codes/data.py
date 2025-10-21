@@ -126,7 +126,7 @@ max_defects=50
 for i in range(num):
     j_c=0
     v_c=1.0
-    n_defects=random.randint(1,max_defects)
+    n_defects=random.randint(0,max_defects)
     defects=[]
     array=np.zeros((max_defects,7))
     for k in range(n_defects):
@@ -150,3 +150,4 @@ for i in range(num):
 input_torch=torch.from_numpy(np.block(input_array))
 target_torch=torch.from_numpy(np.block(target_array))
 torch.save({'inputs':input_torch,'targets':target_torch},'data1m.pth')
+
