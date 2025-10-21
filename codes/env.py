@@ -7,10 +7,6 @@ Created on Sat Sep  6 02:20:45 2025
 
 # newenv.py
 # -*- coding: utf-8 -*-
-"""
-Optimized for reduced CPU-GPU transfers.
-All heavy calculations use torch (works on CPU or GPU).
-"""
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -18,7 +14,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# 坐标映射参数
 X_MIN, X_MAX = -4.0, 4.0
 Y_MIN, Y_MAX = -8.0, 8.0
 
@@ -29,19 +24,13 @@ def denormalize_coord(x_norm, x_min, x_max):
     return x_min + (x_norm + 1.0) * (x_max - x_min) / 2.0
 
 def compute_C_torch(defects, bin_num=50, max_dist=18.0):
-    """
-    defects: tensor shape (n,2) on some device
-    returns: tensor shape (bin_num,) on same device (float32)
-    """
     device = defects.device
     n = defects.shape[0]
     if n < 2:
         return torch.zeros(bin_num, dtype=torch.float32, device=device)
-    # pairwise distances (upper triangle)
     dists = torch.cdist(defects, defects, p=2)
     triu_idx = torch.triu_indices(n, n, offset=1, device=device)
     dists = dists[triu_idx[0], triu_idx[1]]
-    # histogram using torch.histc (returns float)
     hist = torch.histc(dists, bins=bin_num, min=0.0, max=max_dist)
     denom = float(n * (n - 1) / 2.0)
     return (hist / denom).to(torch.float32)
@@ -184,7 +173,6 @@ class network(nn.Module):
         return self.fc(x).squeeze(-1)
 
 def load_stats(path='jc_statistics.pth', device=None):
-    """加载预先计算的均值方差（如果存在），返回 dict 中包含张量（或 None）"""
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     try:
@@ -197,22 +185,14 @@ def load_stats(path='jc_statistics.pth', device=None):
         return None
 
 
-def load_data_from_tensor(state_tensor, stats=None,
+def load_data_from_tensor(state_tensor, stats=None, 
                           x_min=X_MIN, x_max=X_MAX, y_min=Y_MIN, y_max=Y_MAX,
                           device=None):
-    """
-    输入:
-        state_tensor: shape (30,) torch tensor on device; order: [flag,x_norm,y_norm] * 10
-    返回:
-        C,B1,B2,S,G 都是 torch tensors and on same device
-    """
     if device is None:
         device = state_tensor.device
-    # reshape to (10,3)
     x = state_tensor.reshape(10, 3)
     mask = (x[:, 0] > 0)
     if mask.sum() == 0:
-        # empty
         C = torch.zeros(50, dtype=torch.float32, device=device)
         B1 = torch.zeros(32, dtype=torch.float32, device=device)
         B2 = torch.zeros(32, dtype=torch.float32, device=device)
@@ -220,26 +200,19 @@ def load_data_from_tensor(state_tensor, stats=None,
         G = torch.zeros((16, 16), dtype=torch.float32, device=device)
     else:
         coords_norm = x[mask, 1:3]
-        # denormalize
         coords = torch.zeros_like(coords_norm, device=device)
         coords[:, 0] = denormalize_coord(coords_norm[:, 0], x_min, x_max)
         coords[:, 1] = denormalize_coord(coords_norm[:, 1], y_min, y_max)
-        # compute features using torch
-        C = compute_C_torch(coords).unsqueeze(0)  # (50,)
-        # CE branch removed for simplicity (same as before)
+        C = compute_C_torch(coords).unsqueeze(0)  
         B1 = compute_B1_torch(coords).unsqueeze(0)
         B2 = compute_B2_torch(coords).unsqueeze(0)
         S = compute_S_torch(coords).unsqueeze(0)
         G = compute_G_torch(coords).unsqueeze(0)
-    # standardize if stats provided
     if stats is not None:
-        # stats keys: C_mean, C_std, B1_mean, B1_std, B2_mean, B2_std, S_mean, S_std, G_mean, G_std
-        # shapes must match
         def zscore(t, mean_key, std_key):
             if mean_key in stats and std_key in stats:
                 mean = stats[mean_key]
                 std = stats[std_key]
-                # ensure shapes compatible
                 try:
                     return (t - mean) / (std + 1e-8)
                 except Exception:
@@ -250,16 +223,10 @@ def load_data_from_tensor(state_tensor, stats=None,
         B1 = zscore(B1, "B1_mean", "B1_std")
         B2 = zscore(B2, "B2_mean", "B2_std")
         S = zscore(S, "S_mean", "S_std")
-        # G is (grid,grid) - stats maybe same shape
         G = (G - stats["G_mean"]) / (stats["G_std"] + 1e-8)
     return C.to(torch.float32), B1.to(torch.float32), B2.to(torch.float32), S.to(torch.float32), G.to(torch.float32)
 
 class DefectEnv(gym.Env):
-    """
-    自定义 2D 超导缺陷环境（优化版）
-    Observation: (30,) float32 : [flag,x_norm,y_norm] * 10
-    Action: (30,) float32: [keep_flag, x_norm, y_norm] * 10
-    """
     metadata = {"render_modes": ["human"], "render_fps": 30}
 
     def __init__(self, render_mode=None, device=None):
@@ -282,7 +249,6 @@ class DefectEnv(gym.Env):
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
-        # Load reward model and stats once
         self.model = network().to(self.device)
         try:
             self.model.load_state_dict(torch.load('jc_predict_weights.pth', map_location=self.device))
@@ -298,19 +264,16 @@ class DefectEnv(gym.Env):
         state[1::3] = np.random.uniform(-1.0, 1.0, size=10).astype(np.float32)
         state[2::3] = np.random.uniform(-1.0, 1.0, size=10).astype(np.float32)
         self.state = state
+        self.current_step=0
+        self.max_steps=256
         return self.state.copy(), {}
 
     def step(self, action):
-        """
-        action: numpy array shape (30,)
-        we convert once to torch on device, compute reward on device, then return numpy obs and python reward
-        """
         action = np.array(action, dtype=np.float32).flatten()
         keep_flag = (action[0::3] > 0.5).astype(np.float32)
         dx_norm = action[1::3]
         dy_norm = action[2::3]
 
-        # update state (numpy arrays -> minimal CPU ops)
         self.state[0::3] = keep_flag
         mask = keep_flag > 0
         self.state[1::3][mask] = dx_norm[mask]
@@ -318,21 +281,14 @@ class DefectEnv(gym.Env):
         self.state[1::3] = np.clip(self.state[1::3], -1.0, 1.0)
         self.state[2::3] = np.clip(self.state[2::3], -1.0, 1.0)
 
-        # compute reward using torch on device (single conversion)
         state_tensor = torch.tensor(self.state, dtype=torch.float32, device=self.device)
         C, B1, B2, S, G = load_data_from_tensor(state_tensor, stats=self.stats, device=self.device)
-        # shapes returned are batched as (1,...) so pass directly
         with torch.no_grad():
-            # network expects C,B1,B2 shapes (batch, bins), S (batch,6), G (batch,2,grid,grid)
-            # ensure shapes:
             C_t = C.to(self.device)
             B1_t = B1.to(self.device)
             B2_t = B2.to(self.device)
             S_t = S.to(self.device)
             G_t = G.to(self.device)
-            # some adjustments in shapes for compatibility with network forward
-            # our network forward expects C: (batch, bins), B1: (batch, bins), B2: (batch, bins), S: (batch,6), G: (batch,2,grid,grid)
-            # compute reward
             try:
                 pred = self.model(C_t, B1_t, B2_t, S_t, G_t)
                 reward = float(max(-3.0, pred.squeeze(0).item()))
@@ -340,6 +296,9 @@ class DefectEnv(gym.Env):
                 reward = float(-3.0)
         terminated = False
         truncated = False
+        self.current_step+=1
+        if self.current_step>=self.max_steps:
+            terminated=True
         info = {}
         return self.state.copy(), float(reward), terminated, truncated, info
 
