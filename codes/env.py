@@ -256,6 +256,8 @@ class DefectEnv(gym.Env):
             pass
         self.model.eval()
         self.stats = load_stats('jc_statistics.pth', device=self.device)
+        self.current_step=0
+        self.max_steps=256
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
